@@ -155,6 +155,7 @@
 
 (defun eval (form env &optional stack)
   (typecase form
+    (null (ret stack form)) ; nil is a symbol
     (symbol
      (let ((pair (assoc form env)))
        (if pair

@@ -112,6 +112,12 @@
 
 (defun escape-frame () (make-instance 'escape-frame))
 
+(defclass eval-frame (frame)
+  ((%form :initarg :form :reader form)))
+
+(defun eval-frame (form env)
+  (make-instance 'eval-frame :form form :env env))
+
 (defclass evlis-frame (frame)
   ((%argforms :initarg :argforms :reader argforms)
    ;; A list argn...arg1 arg0 function
@@ -176,6 +182,11 @@
         (destructuring-bind (test then else) (rest form)
           (eval test env
                 (cons (if-frame then else env) stack))))
+       ((progn)
+        (ret (append (loop for subform in (rest form)
+                           collect (eval-frame subform env))
+                     stack)
+             nil))
        ((let/ec)
         ;; NOTE: Could maybe escape more efficiently by having a
         ;; let/ec-cleanup frame in here that marks the escape
@@ -240,6 +251,10 @@
       (if (tailp escape-stack stack)
           (ret escape-stack value)
           (error "Out of extent return")))))
+
+(defmethod deframe ((frame eval-frame) ignored stack)
+  (declare (ignore ignored))
+  (eval (form frame) (env frame) stack))
 
 (defmethod deframe ((frame evlis-frame) thing stack)
   ;; This is kind of ugly.

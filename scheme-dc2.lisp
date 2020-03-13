@@ -44,9 +44,7 @@
 
 ;;;; Interaction between let/dc and distinct let/ecs might be a little
 ;;;; weird. Not sure yet. Like having resets with different names, and
-;;;; interleaved. FIXME: Yeah see note in escape-frame. If that's fixed,
-;;;; imminent escapes will be on the stack, and if that stack is copied
-;;;; those probably need to be fixed up.
+;;;; interleaved.
 
 ;;;; There are weird cases. Consider
 ;;;; (let/ec outer (... (let/ec inner ... (escape outer ... (let/dc (s inner) ...)))))
@@ -110,11 +108,9 @@
 (defun if-frame (then else env)
   (make-instance 'if-frame :then then :else else :env env))
 
-(defclass escape-frame (frame)
-  ((%body :initarg :body :reader body)))
+(defclass escape-frame (frame) ())
 
-(defun escape-frame (body env)
-  (make-instance 'escape-frame :body body :env env))
+(defun escape-frame () (make-instance 'escape-frame))
 
 (defclass evlis-frame (frame)
   ((%argforms :initarg :argforms :reader argforms)
@@ -135,11 +131,9 @@
 (defun let/dc-frame (var body env)
   (make-instance 'let/dc-frame :var var :body body :env env))
 
-(defclass extend-frame (frame)
-  ((%body :initarg :body :reader body)))
+(defclass extend-frame (frame) ())
 
-(defun extend-frame (body env)
-  (make-instance 'extend-frame :body body :env env))
+(defun extend-frame () (make-instance 'extend-frame))
 
 ;;; This is a Scheme escape continuation, which is just a copy of the
 ;;; stack, but wrapped up so it's not confused with a list.
@@ -191,10 +185,14 @@
           (eval body
                 (acons var (reify-stack stack) env)
                 stack)))
+       ;;; NOTE that escape and extend are basically functions,
+       ;;; except that we want to note their frames on the stack.
        ((escape)
         (destructuring-bind (escape body) (rest form)
           (eval escape env
-                (cons (escape-frame body env) stack))))
+                (list* (evlis-frame (list body) nil env)
+                       (escape-frame)
+                       stack))))
        ((let/dc)
         (destructuring-bind ((var escape) body) (rest form)
           (eval escape env
@@ -202,7 +200,9 @@
        ((extend)
         (destructuring-bind (continuation body) (rest form)
           (eval continuation env
-                (cons (extend-frame body env) stack))))
+                (list* (evlis-frame (list body) nil env)
+                       (extend-frame)
+                       stack))))
        #+dynamic-wind
        ((unwind-protect)
         (destructuring-bind (protected cleanup) (rest form)
@@ -233,16 +233,12 @@
     ((t) (eval (then frame) (env frame) stack))
     ((nil) (eval (else frame) (env frame) stack))))
 
-(defmethod deframe ((frame escape-frame) escape stack)
-  ;; FIXME: This is not correct.
-  ;; The unwinding occurs, essentially, before the return form is evaluated,
-  ;; meaning that the return form can't execute its own closer nonlocal exits.
-  ;; This is also unrealistic for a stack, since the stack frames need to
-  ;; be around for the form to be evaluated.
-  (let ((escape-stack (dereify-stack escape)))
-    (if (tailp escape-stack stack)
-        (eval (body frame) (env frame) escape-stack)
-        (error "Out of extent return"))))
+(defmethod deframe ((frame escape-frame) args stack)
+  (destructuring-bind (escape value) args
+    (let ((escape-stack (dereify-stack escape)))
+      (if (tailp escape-stack stack)
+          (ret escape-stack value)
+          (error "Out of extent return")))))
 
 (defmethod deframe ((frame evlis-frame) thing stack)
   ;; This is kind of ugly.
@@ -273,6 +269,6 @@
         (acons (var frame) (continuation (dereify-stack escape) stack) (env frame))
         stack))
 
-(defmethod deframe ((frame extend-frame) continuation stack)
-  (eval (body frame) (env frame)
-        (append (slice continuation) stack)))
+(defmethod deframe ((frame extend-frame) args stack)
+  (destructuring-bind (continuation value) args
+    (ret (append (slice continuation) stack) value)))

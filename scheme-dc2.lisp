@@ -47,15 +47,30 @@
 ;;;; interleaved.
 
 ;;;; There are weird cases. Consider
-;;;; (let/ec outer (... (let/ec inner ... (escape outer ... (let/dc (s inner) ...)))))
+#+(or)
+(let/ec outer
+  (...
+   (let/ec inner
+     (...
+      (escape outer
+              (...
+               (let/dc (s inner) ...)))))))
 ;;;; Now if you try to extend with s, what happens?
 ;;;; I would say extend ought to exit to outer instead of returning like usual.
 ;;;; But then "extend" is a misnomer. Worse, if unwind-protect exists, cleanups
 ;;;; between outer and inner somehow need to be saved.
-;;;; So maybe this is actually an error - since the continuation of the let/dc is
-;;;; not actually an extension of inner!
-;;;; But then we're back to where we were with escapes not being on the stack.
-;;;; Maybe dynamic-extent and continuation extension are not actually the same...?
+;;;; My solution: 1) eat the misnomer.
+;;;; 2) Somehow save. let/dc could do it, but rather, by thinking explicitly
+;;;;  about the continuations of various forms we can be reasonable.
+;;;; In Racket, the continuation of a dynamic-wind post-thunk (analogous to
+;;;; unwind-protect), when called during an unwind, is the continuation of
+;;;; the dynamic-wind, extended with a jump to the next continuation
+;;;; in the unwind (i.e. calling the next post-thunk, or the destination).
+;;;; Now obviously that jump will always abort before the unwind-protect is
+;;;; returned from, but this clarifies the state of the stack.
+;;;; There are similar continuations for e.g. escape. The continuation of
+;;;; the return value is not simply the escape - it's the continuation
+;;;; of (escape ...), extended with something that jumps to the escape.
 
 (defpackage #:scheme
   (:use #:cl)

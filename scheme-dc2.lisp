@@ -31,8 +31,9 @@
 ;;;; (k form) = (extend k form), k being a continuation bound by shift
 ;;;;  or by let/dc respectively.
 
-;;;; The implementation is half-remembered from a paper I've unfortunately
-;;;; forgotten the name of. In short, you have the basic design of an
+;;;; The implementation is half-remembered from  "Functional Derivation
+;;;; of a Virtual Machine for Delimited Continuations", by Asai & Kitani.
+;;;; In short, you have the basic design of an
 ;;;; interpreter for Scheme with call/cc - eval takes a form, an
 ;;;; environment, and a continuation. But instead of continuations being
 ;;;; functions, they are call stacks: here, actual lists, with elements

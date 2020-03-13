@@ -124,6 +124,10 @@
 (defun evlis-frame (argforms vals env)
   (make-instance 'evlis-frame :argforms argforms :vals vals :env env))
 
+(defclass apply-frame (frame) ())
+
+(defun apply-frame () (make-instance 'apply-frame))
+
 (defclass let/dc-frame (frame)
   ((%var :initarg :var :reader var)
    (%body :initarg :body :reader body)))
@@ -212,7 +216,9 @@
        (otherwise
         (destructuring-bind (function &rest argforms) form
           (eval function env
-                (cons (evlis-frame argforms nil env) stack))))))
+                (list* (evlis-frame argforms nil env)
+                       (apply-frame)
+                       stack))))))
     (t (ret stack form))))
 
 (defun ret (stack value)
@@ -246,18 +252,21 @@
   ;; The first evlis frame, direct from eval, adds the function it's
   ;; passed (as thing) to the values.
   ;; The last evlis frame, which may also be the first, finds that
-  ;; there is nothing left to evaluates, and applies the values.
+  ;; there is nothing left to evaluate, and passes the whole list
+  ;; on to the next frame, which is an apply-frame or something.
   ;; Frames that find something to evaluate do so with a new
   ;; evlis-frame on the stack.
   (let ((vals (cons thing (vals frame)))
         (argforms (argforms frame)))
     (if (null argforms)
-        (let ((rvals (reverse vals)))
-          (apply (first rvals) stack (rest rvals)))
+        (ret stack (reverse vals))
         (let ((env (env frame)))
           (eval (first argforms) env
                 (cons (evlis-frame (rest argforms) vals env)
                       stack))))))
+
+(defmethod deframe ((frame apply-frame) fn-args stack)
+  (apply (first fn-args) stack (rest fn-args)))
 
 (defmethod deframe ((frame let/dc-frame) escape stack)
   (eval (body frame)

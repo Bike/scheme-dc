@@ -136,6 +136,14 @@
                         do (compile-form f env code)
                            (gen code 'scheme-vm:closure-set cindex i))
                   (gen code 'get cindex))))))
+       ((let/ec)
+        (destructuring-bind (var body) (rest form)
+          (unless (symbolp var)
+            (error "Syntax error in let/ec"))
+          (gen-let/ec var body env code)))
+       ((escape)
+        (destructuring-bind (escape form) (rest form)
+          (gen-escape escape form env code)))
        (otherwise
         (destructuring-bind (function &rest argforms) form
           (gen-call function argforms env code)))))
@@ -207,3 +215,47 @@
         (fixup code to-fix next-ip)
         (push (aref code to-fix) *fixups*)))
     (gen code 'scheme-vm:rotatef-closure cindex)))
+
+(defun gen-let/ec (var form env code)
+  ;; 1) Allocate the escape and store it in the frame.
+  ;; 2) The closure register is caller-save, so do that.
+  ;; 3) Execute the form.
+  ;; 4) We need to do some processing upon abnormal return, so jump.
+  ;; 5) For abnormal return, restore the closure, then meet up with normal.
+  (let* ((cindex (new-value-index)) ; TODO: only need one per function
+         (eindex (new-value-index))
+         (e-to-fix (gen code 'scheme-vm:alloc-escape 0)))
+    (push (aref code e-to-fix) *fixups*)
+    (gen code 'set eindex)
+    ;; 2
+    ;; Note that cindex contains junk so we only need this one way,
+    ;; but I'd already written rotatef-closure, sooooo
+    (gen code 'scheme-vm:rotatef-closure cindex)
+    ;; 3
+    (let ((env (cons (list var :local eindex) env)))
+      (compile-form form env code))
+    ;; 4
+    (let ((g-to-fix (gen code 'go 0)))
+      (push (aref code g-to-fix) *fixups*)
+      (fixup code e-to-fix (next-ip code))
+      ;; 5
+      (gen code 'scheme-vm:rotatef-closure cindex)
+      (fixup code g-to-fix (next-ip code)))))
+
+(defun gen-escape (escape value env code)
+  ;; 1) Evaluate the escape and store it in the frame.
+  ;; 2) Evaluate the value (into alloc).
+  ;; 3) Set the link register from the escape.
+  ;; 4) Set the frame register from the escape.
+  ;; 5) Return.
+  (let (;; fyi we need more than one of these cos of (escape ... (escape ...))
+        ;; probably. I don't know why I bother mentioning sharing oppors,
+        ;; this is just for learning anyway. Guess I'm learning that?
+        ;; To do this right we'd want, like, a register allocator and shit.
+        (eindex (new-value-index)))
+    (compile-form escape env code) ; 1
+    (gen code 'set eindex)
+    (compile-form value env code) ; 2
+    (gen code 'scheme-vm:escape-ip eindex) ; 3
+    (gen code 'scheme-vm:escape-frame eindex) ; 4
+    (gen code 'return))) ; 5

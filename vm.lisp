@@ -5,7 +5,8 @@
   (:export #:igo #:set-link #:save-link #:restore-link
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
-           #:rotatef-closure))
+           #:rotatef-closure
+           #:alloc-escape #:escape-frame #:escape-ip))
 
 (in-package #:scheme-vm)
 
@@ -32,6 +33,13 @@
 
 (defun closure (ip size)
   (make-instance 'closure :ip ip :vec (make-array size)))
+
+(defclass escape ()
+  ((%ip :initarg :ip :reader escape-ip)
+   (%frame :initarg :frame :reader escape-frame)))
+
+(defun make-escape (ip frame)
+  (make-instance 'escape :ip ip :frame frame))
 
 (defvar *trace* nil)
 
@@ -126,4 +134,17 @@
                   (setf (svref vector vector-index) accum))))
              ((rotatef-closure)
               (destructuring-bind (i) data
-                (rotatef closure (frame-value frame i)))))))
+                (rotatef closure (frame-value frame i))))
+             ;; escapes: a pair of an IP and a frame
+             ;; NOTE/TODO?: With flow analysis, the IP can often
+             ;; sometimes be known statically, but we don't
+             ;; optimize this.
+             ((alloc-escape)
+              (destructuring-bind (next-ip) data
+                (setf accum (make-escape next-ip frame))))
+             ((escape-frame)
+              (destructuring-bind (i) data
+                (setf frame (escape-frame (frame-value frame i)))))
+             ((escape-ip)
+              (destructuring-bind (i) data
+                (setf link (escape-ip (frame-value frame i))))))))

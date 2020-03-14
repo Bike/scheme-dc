@@ -1,11 +1,11 @@
 (defpackage #:scheme-vm
   (:use #:cl)
   (:export #:interpret)
-  (:export #:*trace*)
+  (:export #:*trace* #:display-code)
   (:export #:igo #:set-link #:save-link #:restore-link
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
-           #:rotatef-closure
+           #:save-closure #:load-closure #:rotatef-closure
            #:alloc-escape #:escape-frame #:escape-ip
            #:slice-continuation #:extend))
 
@@ -69,6 +69,14 @@
 
 (defvar *trace* nil)
 
+(defun nice-instruction-print (ip opcode args)
+  (format t "~&~d: ~a~{~^ ~a~}~%" ip opcode args))
+
+(defun display-code (code)
+  (loop for (opcode . args) across code
+        for i from 0
+        do (nice-instruction-print i opcode args)))
+
 (defun interpret (code &optional arg)
   (declare (optimize debug))
   (loop with frame = nil ; holds frame
@@ -78,7 +86,7 @@
         for ip = 0 then (1+ ip)
         for (opcode . data) = (svref code ip)
         when *trace*
-          do (format t "~&~a~{~^ ~a~}~%" opcode data)
+          do (nice-instruction-print ip opcode data)
         do (ecase opcode
              ((quote)
               (destructuring-bind (object) data
@@ -161,6 +169,12 @@
                 (let* ((closure (frame-value frame cindex))
                        (vector (closure-vector closure)))
                   (setf (svref vector vector-index) accum))))
+             ((save-closure)
+              (destructuring-bind (cindex) data
+                (setf (frame-value frame cindex) closure)))
+             ((load-closure)
+              (destructuring-bind (cindex) data
+                (setf closure (frame-value frame cindex))))
              ((rotatef-closure)
               (destructuring-bind (i) data
                 (rotatef closure (frame-value frame i))))
@@ -188,8 +202,8 @@
               ;; recent frames (and doing the latter is an optimization)
               (destructuring-bind (next-ip) data
                 (multiple-value-bind (shallow deep)
-                    (copy-slice frame accum)
-                  (continuation next-ip shallow deep))))
+                    (copy-slice frame (escape-frame accum))
+                  (setf accum (continuation next-ip shallow deep)))))
              ((extend)
               ;; Throw a ton more frames on the stack.
               (destructuring-bind (next-ip i) data

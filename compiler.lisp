@@ -184,7 +184,10 @@
        ((progn)
         (loop for subform in (rest form)
               appending (free subform bound)))
-       ((funcall) nil)
+       ((funcall)
+        (destructuring-bind (function form &rest constants) (rest form)
+          (declare (ignore function constants))
+          (free form bound)))
        ((let/ec)
         (destructuring-bind (var body) (rest form)
           (free body (list* var bound))))
@@ -241,9 +244,7 @@
     (push (aref code e-to-fix) *fixups*)
     (gen code 'set eindex)
     ;; 2
-    ;; Note that cindex contains junk so we only need this one way,
-    ;; but I'd already written rotatef-closure, sooooo
-    (gen code 'scheme-vm:rotatef-closure cindex)
+    (gen code 'scheme-vm:save-closure cindex)
     ;; 3
     (let ((env (cons (list var :local eindex) env)))
       (compile-form form env code))
@@ -252,7 +253,7 @@
       (push (aref code g-to-fix) *fixups*)
       (fixup code e-to-fix (next-ip code))
       ;; 5
-      (gen code 'scheme-vm:rotatef-closure cindex)
+      (gen code 'scheme-vm:load-closure cindex)
       (fixup code g-to-fix (next-ip code)))))
 
 (defun gen-escape (escape value env code)
@@ -301,7 +302,8 @@
     (compile-form continuation env code)
     (gen code 'set cont-index)
     (compile-form value env code)
-    (gen code 'scheme-vm:rotatef-closure cindex)
-    (let ((to-fix (gen code 'scheme-vm:extend (next-ip code) cont-index)))
+    (gen code 'scheme-vm:save-closure cindex)
+    (let ((to-fix (gen code 'scheme-vm:extend 0 cont-index)))
+      (fixup code to-fix (next-ip code))
       (push (aref code to-fix) *fixups*))
-    (gen code 'scheme-vm:rotatef-closure cindex)))
+    (gen code 'scheme-vm:load-closure cindex)))

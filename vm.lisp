@@ -2,6 +2,7 @@
   (:use #:cl)
   (:export #:igo #:set-link #:save-link #:restore-link
            #:closure-alloc #:closure-ip #:closure-vec
+           #:closure-get #:closure-set
            #:rotatef-closure))
 
 (in-package #:scheme-vm)
@@ -25,7 +26,7 @@
 
 (defclass closure ()
   ((%ip :initarg :ip :reader closure-ip)
-   (%vec :initarg :vec :reader closure-vector)))
+   (%vec :initarg :vec :reader closure-vector :type simple-vector)))
 
 (defun closure (ip size)
   (make-instance 'closure :ip ip :vec (make-array size)))
@@ -109,6 +110,14 @@
              ((closure-vec)
               (destructuring-bind (i) data
                 (setf (frame-value frame i) (closure-vector accum))))
+             ((closure-get)
+              (destructuring-bind (vector-index) data
+                (setf accum (svref (closure-vector closure) vector-index))))
+             ((closure-set)
+              (destructuring-bind (cindex vector-index) data
+                (let* ((closure (frame-value frame cindex))
+                       (vector (closure-vector closure)))
+                  (setf (svref vector vector-index) accum))))
              ((rotatef-closure)
               (destructuring-bind (i) data
                 (rotatef closure (frame-value frame i)))))))

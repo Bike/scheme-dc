@@ -100,7 +100,7 @@
            (destructuring-bind (location i) (cdr pair)
              (ecase location
                ((:local) (gen code 'get i))
-               ((:closure) (gen code 'getf i))))
+               ((:closure) (gen code 'scheme-vm:closure-get i))))
            (error "Unbound variable: ~a" form))))
     (cons
      (case (first form)
@@ -114,15 +114,28 @@
                   do (compile-form subform env code))))
        ((lambda)
         (destructuring-bind (params body) (rest form)
-          (let ((free (free body (flatten params))))
-            (unless (null free) (error "no closures yet"))
-            (let ((cenv (remove :local env :key #'second)))
+          (let* ((free (free body (flatten params)))
+                 ;; TODO: globals
+                 (cenv (loop for f in free
+                             for i from 0
+                             collecting (list f :closure i)))
+                 ;; NOTE: We only need one of these per function,
+                 ;; since closed over variables don't require
+                 ;; further evaluation
+                 (cindex (new-value-index)))
               (multiple-value-bind (fcode ffixups)
                   (compile-function-and params body cenv)
                 (let ((to-fix
                         (gen code 'scheme-vm:closure-alloc
-                             0 0)))
-                  (push (list* fcode (aref code to-fix) ffixups) *fixups*)))))))
+                             0 (length free))))
+                  (push (list* fcode (aref code to-fix) ffixups) *fixups*)
+                  (gen code 'set cindex)
+                  (loop for f in free
+                        for i from 0
+                        do (assert (symbolp f)) ; sanity check
+                        do (compile-form f env code)
+                           (gen code 'scheme-vm:closure-set cindex i))
+                  (gen code 'get cindex))))))
        (otherwise
         (destructuring-bind (function &rest argforms) form
           (gen-call function argforms env code)))))

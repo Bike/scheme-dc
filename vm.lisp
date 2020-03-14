@@ -94,6 +94,9 @@
                 (if (null link)
                     (return accum)
                     (setf ip (1- link)))))
+             ((funcall)
+              (destructuring-bind (function &rest constants) data
+                (setf accum (apply function accum constants))))
              ((set-link)
               (destructuring-bind (link-ip) data
                 (setf link link-ip)))

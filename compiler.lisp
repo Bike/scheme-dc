@@ -136,6 +136,10 @@
                         do (compile-form f env code)
                            (gen code 'scheme-vm:closure-set cindex i))
                   (gen code 'get cindex))))))
+       ((funcall) ; yes this is a dumb hack.
+        (destructuring-bind (function form &rest args) (rest form)
+          (compile-form form env code)
+          (apply #'gen code 'funcall function args)))
        ((let/ec)
         (destructuring-bind (var body) (rest form)
           (unless (symbolp var)
@@ -180,6 +184,7 @@
        ((progn)
         (loop for subform in (rest form)
               appending (free subform bound)))
+       ((funcall) nil)
        ((let/ec)
         (destructuring-bind (var body) (rest form)
           (free body (list* var bound))))

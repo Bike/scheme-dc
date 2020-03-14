@@ -1,5 +1,6 @@
 (defpackage #:scheme-vm
   (:use #:cl)
+  (:export #:interpret)
   (:export #:igo #:set-link #:save-link #:restore-link
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
@@ -31,10 +32,10 @@
 (defun closure (ip size)
   (make-instance 'closure :ip ip :vec (make-array size)))
 
-(defun interpret (code)
+(defun interpret (code &optional arg)
   (declare (optimize debug))
   (loop with frame = nil ; holds frame
-        with accum = nil ; general purpose + argument
+        with accum = arg ; general purpose + argument
         with link = nil ; holds return address upon entry
         with closure = nil ; holds closure vector
         for ip = 0 then (1+ ip)

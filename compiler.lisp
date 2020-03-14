@@ -31,23 +31,36 @@
 
 ;;; Compile a function and any sub functions, putting everything
 ;;; in one vector.
+;;; This is very ugly so some more explanation.
+;;; A fixup is something where we need to fiddle with an immediate
+;;; because it refers to a literal instruction pointer.
+;;; We have two kinds of fixups. One is just an instruction, i.e.
+;;; an (opcode . args) list as defined in vm.lisp. These we should
+;;; probably actually remove with relative addressing (FIXME)
+;;; except for closure-alloc.
+;;; The other kind is an entire sub function, or inner function.
+;;; These we have as lists (code-vector allocation-fixup . other-fixups).
+;;; We paste all functions together cos you know, turing machine shite.
 (defun compile-function-and (params body env)
+  (declare (optimize debug))
   (multiple-value-bind (code fixups)
       (compile-function params body env)
     (loop for fixup in fixups
           for thing = (first fixup)
           when (vectorp thing) ; sub function
             collect fixup into subs
+            and collect (second fixup) into boring ; in case this is recursive
           else collect fixup into boring
           finally
              (return
                (let* ((code-length (length code))
                       (new-code-length
-                        (reduce #'+ subs :key #'first
-                                         :initial-value code-length))
+                        (+ code-length
+                           (loop for (subcode) in subs
+                                 summing (length subcode))))
                       (new-code (make-array new-code-length)))
                  (replace new-code code)
-                 (loop for (subcode closure-alloc more-fixups)
+                 (loop for (subcode closure-alloc . more-fixups)
                          in subs
                        for ip = code-length
                          then (+ ip subcode-length) ; sc-length from prev iter
@@ -108,7 +121,7 @@
                 (let ((to-fix
                         (gen code 'scheme-vm:closure-alloc
                              0 0)))
-                  (push (list* fcode to-fix ffixups) *fixups*)))))))
+                  (push (list* fcode (aref code to-fix) ffixups) *fixups*)))))))
        (otherwise
         (destructuring-bind (function &rest argforms) form
           (gen-call function argforms env code)))))

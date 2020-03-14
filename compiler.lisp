@@ -17,14 +17,49 @@
 (defun compile-function (params body env)
   (let* ((code (make-array 0 :fill-pointer 0 :adjustable t))
          (*fixups* nil)
-         (*nvals* 0)
+         (*nvals* 1) ; unconditionally store link register
          (to-fix (gen code 'scheme-vm:make-variable-frame 0))
          (env (append (gen-arg-parse params code) env)))
+    (gen code 'scheme-vm:save-link 0)
     ;; Get goin
     (compile-form body env code)
+    ;; aaaaand return.
+    (gen code 'scheme-vm:restore-link 0)
     (gen code 'return)
     (fixup code to-fix *nvals*) ; frame size now known
     (values code *fixups*)))
+
+;;; Compile a function and any sub functions, putting everything
+;;; in one vector.
+(defun compile-function-and (params body env)
+  (multiple-value-bind (code fixups)
+      (compile-function params body env)
+    (loop for fixup in fixups
+          for thing = (first fixup)
+          when (vectorp thing) ; sub function
+            collect fixup into subs
+          else collect fixup into boring
+          finally
+             (return
+               (let* ((code-length (length code))
+                      (new-code-length
+                        (reduce #'+ subs :key #'first
+                                         :initial-value code-length))
+                      (new-code (make-array new-code-length)))
+                 (replace new-code code)
+                 (loop for (subcode closure-alloc more-fixups)
+                         in subs
+                       for ip = code-length
+                         then (+ ip subcode-length) ; sc-length from prev iter
+                       for subcode-length = (length subcode)
+                       do (setf (second closure-alloc) ip)
+                          (loop for fixup in more-fixups
+                                do (incf (second fixup) ip))
+                          (replace new-code subcode :start1 ip)
+                       append more-fixups into all-fixups
+                       finally (return
+                                 (values new-code
+                                         (append boring all-fixups)))))))))
 
 (defun gen-arg-parse (params code)
   (etypecase params
@@ -69,7 +104,7 @@
             (unless (null free) (error "no closures yet"))
             (let ((cenv (remove :local env :key #'second)))
               (multiple-value-bind (fcode ffixups)
-                  (compile-function params body cenv)
+                  (compile-function-and params body cenv)
                 (let ((to-fix
                         (gen code 'scheme-vm:closure-alloc
                              0 0)))
@@ -143,5 +178,5 @@
       (gen code 'scheme-vm:igo findex) ; ip = [findex]
       (let ((next-ip (next-ip code)))
         (fixup code to-fix next-ip)
-        (push (cons (aref code to-fix) next-ip) *fixups*)))
+        (push (aref code to-fix) *fixups*)))
     (gen code 'scheme-vm:rotatef-closure cindex)))

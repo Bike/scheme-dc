@@ -1,6 +1,7 @@
 (defpackage #:scheme-vm
   (:use #:cl)
-  (:export #:igo #:set-link #:make-variable-frame
+  (:export #:igo #:set-link #:save-link #:restore-link
+           #:make-variable-frame
            #:closure-alloc #:closure-ip #:closure-vec
            #:rotatef-closure))
 
@@ -53,6 +54,12 @@
              ((set-link)
               (destructuring-bind (link-ip) data
                 (setf link link-ip)))
+             ((save-link)
+              (destructuring-bind (i) data
+                (setf (frame-value frame i) link)))
+             ((restore-link)
+              (destructuring-bind (i) data
+                (setf link (frame-value frame i))))
              ((make-variable-frame)
               (destructuring-bind (nvals) data
                 (setf accum (make-variable-frame nvals frame))))

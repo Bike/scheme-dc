@@ -72,6 +72,19 @@
 ;;;; the return value is not simply the escape - it's the continuation
 ;;;; of (escape ...), extended with something that jumps to the escape.
 
+;;;; Not sure where to put this: Taking continuations seriously has
+;;;; consequences for parallel execution. Consider
+;;;; (values (setq a (1+ b)) (setq b (1+ a))) with a = b = 0 initially.
+;;;; If argument evaluations are indeterminately sequenced,
+;;;; you get either 1 2 or 2 1. If they're unsequenced, 1 1 is also possible,
+;;;; by executing t1 = (1+ b); t2 = (1+ a); (setq a t1); (setq b t2)
+;;;; But in parallel if we have (values (escape) (escape)) we'd get two
+;;;; threads of execution at the exit point, which is obviously stupid.
+;;;; More likely it would result in an error, as the threads' continuations
+;;;; do not extend that far back. Both options are silly in my opinion.
+;;;; As such the user should have to explicitly indicate parallelism,
+;;;; though the compiler could find opportunities if it can prove no escape.
+
 (defpackage #:scheme
   (:use #:cl)
   (:shadow #:eval #:continue)

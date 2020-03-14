@@ -118,7 +118,7 @@
                 (setf (frame-value frame i) (closure-vector accum))))
              ((closure-get)
               (destructuring-bind (vector-index) data
-                (setf accum (svref (closure-vector closure) vector-index))))
+                (setf accum (svref closure vector-index))))
              ((closure-set)
               (destructuring-bind (cindex vector-index) data
                 (let* ((closure (frame-value frame cindex))

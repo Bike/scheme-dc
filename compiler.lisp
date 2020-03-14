@@ -19,12 +19,15 @@
          (*fixups* nil)
          (*nvals* 1) ; unconditionally store link register
          (to-fix (gen code 'scheme-vm:make-variable-frame 0))
+         (_ (gen code 'push))
          (env (append (gen-arg-parse params code) env)))
+    (declare (ignore _))
     (gen code 'scheme-vm:save-link 0)
     ;; Get goin
     (compile-form body env code)
     ;; aaaaand return.
     (gen code 'scheme-vm:restore-link 0)
+    (gen code 'pop)
     (gen code 'return)
     (fixup code to-fix *nvals*) ; frame size now known
     (values code *fixups*)))

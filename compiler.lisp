@@ -144,6 +144,14 @@
        ((escape)
         (destructuring-bind (escape form) (rest form)
           (gen-escape escape form env code)))
+       ((let/dc)
+        (destructuring-bind ((var escape) body) (rest form)
+          (unless (symbolp var)
+            (error "Syntax error in let/dc"))
+          (gen-let/dc var escape body env code)))
+       ((extend)
+        (destructuring-bind (continuation form) (rest form)
+          (gen-extend continuation form env code)))
        (otherwise
         (destructuring-bind (function &rest argforms) form
           (gen-call function argforms env code)))))
@@ -259,3 +267,36 @@
     (gen code 'scheme-vm:escape-ip eindex) ; 3
     (gen code 'scheme-vm:escape-frame eindex) ; 4
     (gen code 'return))) ; 5
+
+(defun gen-let/dc (var escape body env code)
+  ;; 1) Evaluate the escape into accum.
+  ;; 2) Copy the partial continuation into accum.
+  ;; 3) Move it to the frame.
+  ;; 4) Evaluate the body.
+  (compile-form escape env code) ; 1
+  (let ((to-fix (gen code 'scheme-vm:slice-continuation 0)) ; 2
+        (cont-index (new-value-index)))
+    (push (aref code to-fix) *fixups*)
+    (gen code 'set cont-index) ; 3
+    (let ((env (cons (list var :local cont-index) env)))
+      (compile-form body env code)) ; 4
+    (fixup code to-fix (next-ip code))))
+
+(defun gen-extend (continuation value env code)
+  ;; This works kind of like a call, so:
+  ;; 1) Evaluate the continuation and stuff it in the frame.
+  ;; 2) Evaluate the value form into accum.
+  ;; 3) Save the closure register into the frame.
+  ;; 4) Do the extension (change frame and return).
+  ;;    This is a complicated operation that would probably be
+  ;;    a function call in the real world, but we have an instruction.
+  ;; 5) Restore the closure register.
+  (let ((cont-index (new-value-index))
+        (cindex (new-value-index)))
+    (compile-form continuation env code)
+    (gen code 'set cont-index)
+    (compile-form value env code)
+    (gen code 'scheme-vm:rotatef-closure cindex)
+    (let ((to-fix (gen code 'scheme-vm:extend (next-ip code) cont-index)))
+      (push (aref code to-fix) *fixups*))
+    (gen code 'scheme-vm:rotatef-closure cindex)))

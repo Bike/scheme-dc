@@ -6,12 +6,13 @@
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
            #:rotatef-closure
-           #:alloc-escape #:escape-frame #:escape-ip))
+           #:alloc-escape #:escape-frame #:escape-ip
+           #:slice-continuation #:extend))
 
 (in-package #:scheme-vm)
 
 (defclass frame ()
-  ((%next :initarg :next :reader next :type (or frame null))))
+  ((%next :initarg :next :accessor next :type (or frame null))))
 
 (defclass variable-frame (frame)
   ((%vals :initarg :vals :reader vals :type simple-vector)))
@@ -21,6 +22,9 @@
   (check-type next (or frame null))
   (make-instance 'variable-frame
     :vals (make-array nvals) :next next))
+
+(defun copy-variable-frame (frame)
+  (make-instance 'variable-frame :vals (copy-seq (vals frame)) :next nil))
 
 (defun frame-value (frame i)
   (svref (vals frame) i))
@@ -40,6 +44,28 @@
 
 (defun make-escape (ip frame)
   (make-instance 'escape :ip ip :frame frame))
+
+(defclass continuation ()
+  ((%ip :initarg :ip :reader continuation-ip)
+   (%shallow :initarg :shallow :reader continuation-shallow)
+   (%deep :initarg :deep :reader continuation-deep)))
+
+(defun continuation (ip shallow deep)
+  (make-instance 'continuation :ip ip :shallow shallow :deep deep))
+
+(defun copy-slice (shallow deep)
+  (assert (typep shallow 'variable-frame))
+  (assert (typep deep 'variable-frame))
+  (loop with shallow-copy = (copy-variable-frame shallow)
+        for prev = shallow-copy then copy
+        for frame = (next shallow) then (next frame)
+        for copy = (copy-variable-frame
+                    (if (null frame)
+                        (error "Cannot copy slice from exited escape")
+                        frame))
+        do (setf (next prev) copy)
+        if (eq frame deep)
+          do (return (values shallow-copy copy))))
 
 (defvar *trace* nil)
 
@@ -147,4 +173,30 @@
                 (setf frame (escape-frame (frame-value frame i)))))
              ((escape-ip)
               (destructuring-bind (i) data
-                (setf link (escape-ip (frame-value frame i))))))))
+                (setf link (escape-ip (frame-value frame i)))))
+             ;; delimited continuations: An IP and a list of frames.
+             ;; NOTE that in the more realistic case, these instructions
+             ;; would be functions in the runtime probably.
+             ((slice-continuation)
+              ;; read an escape from accum.
+              ;; make a slice with the given IP and all frames up to escape.
+              ;; since at the moment frames contain their next link,
+              ;; we only need to actually store the most recent and least
+              ;; recent frames (and doing the latter is an optimization)
+              (destructuring-bind (next-ip) data
+                (multiple-value-bind (shallow deep)
+                    (copy-slice frame accum)
+                  (continuation next-ip shallow deep))))
+             ((extend)
+              ;; Throw a ton more frames on the stack.
+              (destructuring-bind (next-ip i) data
+                (let* ((continuation (frame-value frame i))
+                       (dest-ip (continuation-ip continuation))
+                       (dest-shallow (continuation-shallow continuation))
+                       (dest-deep (continuation-deep continuation)))
+                  ;; Fix up the end frame so it returns to here.
+                  ;; Remember that the 0th frame slot is the link save.
+                  (setf (frame-value dest-deep 0) next-ip
+                        (next dest-deep) frame
+                        frame dest-shallow
+                        ip (1- dest-ip))))))))

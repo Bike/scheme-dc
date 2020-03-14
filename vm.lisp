@@ -1,6 +1,7 @@
 (defpackage #:scheme-vm
   (:use #:cl)
   (:export #:interpret)
+  (:export #:*trace*)
   (:export #:igo #:set-link #:save-link #:restore-link
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
@@ -32,6 +33,8 @@
 (defun closure (ip size)
   (make-instance 'closure :ip ip :vec (make-array size)))
 
+(defvar *trace* nil)
+
 (defun interpret (code &optional arg)
   (declare (optimize debug))
   (loop with frame = nil ; holds frame
@@ -40,6 +43,8 @@
         with closure = nil ; holds closure vector
         for ip = 0 then (1+ ip)
         for (opcode . data) = (svref code ip)
+        when *trace*
+          do (format t "~&~a~{~^ ~a~}~%" opcode data)
         do (ecase opcode
              ((quote)
               (destructuring-bind (object) data

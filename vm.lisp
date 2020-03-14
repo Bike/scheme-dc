@@ -1,7 +1,6 @@
 (defpackage #:scheme-vm
   (:use #:cl)
   (:export #:igo #:set-link #:save-link #:restore-link
-           #:make-variable-frame
            #:closure-alloc #:closure-ip #:closure-vec
            #:rotatef-closure))
 
@@ -15,7 +14,7 @@
 
 (defun make-variable-frame (nvals next)
   (check-type nvals (integer 0))
-  (check-type next frame)
+  (check-type next (or frame null))
   (make-instance 'variable-frame
     :vals (make-array nvals) :next next))
 
@@ -32,6 +31,7 @@
   (make-instance 'closure :ip ip :vec (make-array size)))
 
 (defun interpret (code)
+  (declare (optimize debug))
   (loop with frame = nil ; holds frame
         with accum = nil ; general purpose + argument
         with link = nil ; holds return address upon entry
@@ -50,7 +50,9 @@
                 (setf ip (1- (frame-value frame i)))))
              ((return)
               (destructuring-bind () data
-                (setf ip (1- link))))
+                (if (null link)
+                    (return accum)
+                    (setf ip (1- link)))))
              ((set-link)
               (destructuring-bind (link-ip) data
                 (setf link link-ip)))
@@ -60,9 +62,6 @@
              ((restore-link)
               (destructuring-bind (i) data
                 (setf link (frame-value frame i))))
-             ((make-variable-frame)
-              (destructuring-bind (nvals) data
-                (setf accum (make-variable-frame nvals frame))))
              ;; for argument parsing
              ((car)
               (unless (consp accum) (error "Bad CAR"))
@@ -79,8 +78,8 @@
                       (cons accum (frame-value frame i)))))
              ;; ok normal stuff again
              ((push)
-              (destructuring-bind () data
-                (setf frame accum)))
+              (destructuring-bind (nvals) data
+                (setf frame (make-variable-frame nvals frame))))
              ((pop)
               (destructuring-bind () data
                 (if (null frame)

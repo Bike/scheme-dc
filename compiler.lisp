@@ -18,10 +18,8 @@
   (let* ((code (make-array 0 :fill-pointer 0 :adjustable t))
          (*fixups* nil)
          (*nvals* 1) ; unconditionally store link register
-         (to-fix (gen code 'scheme-vm:make-variable-frame 0))
-         (_ (gen code 'push))
+         (to-fix (gen code 'push 0))
          (env (append (gen-arg-parse params code) env)))
-    (declare (ignore _))
     (gen code 'scheme-vm:save-link 0)
     ;; Get goin
     (compile-form body env code)

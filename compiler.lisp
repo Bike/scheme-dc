@@ -233,28 +233,43 @@
     (gen code 'scheme-vm:rotatef-closure cindex)))
 
 (defun gen-let/ec (var form env code)
-  ;; 1) Allocate the escape and store it in the frame.
-  ;; 2) The closure register is caller-save, so do that.
-  ;; 3) Execute the form.
-  ;; 4) We need to do some processing upon abnormal return, so jump.
-  ;; 5) For abnormal return, restore the closure, then meet up with normal.
+  ;; 1) Allocate the escape. Abnormal exit IP is step 6 here.
+  ;; 2) Save the caller-save registers (closure).
+  ;; 3) Save the normal-return IP and frame in the escape,
+  ;;    so that they can be used by extend.
+  ;; 4) Evaluate the form into accum.
+  ;; 5) "Restore" the frame and jump to the IP (using return).
+  ;;    These are NOP normally, but extend will futz with the values
+  ;;    to make this return from the function.
+  ;;    Hypothetically a compiler could elide these if it knows the
+  ;;    escape will not be the endpoint of an extend.
+  ;; 6) Restore the closure. (Doesn't need to be done on normal return,
+  ;;    but it's safe, and why bother branching?)
   (let* ((cindex (new-value-index)) ; TODO: only need one per function
          (eindex (new-value-index))
-         (e-to-fix (gen code 'scheme-vm:alloc-escape 0)))
+         (frame-index (new-value-index))
+         (ip-index (new-value-index))
+         ;; 1
+         (e-to-fix (gen code 'scheme-vm:alloc-escape 0 ip-index frame-index)))
     (push (aref code e-to-fix) *fixups*)
     (gen code 'set eindex)
-    ;; 2
-    (gen code 'scheme-vm:save-closure cindex)
+    (gen code 'scheme-vm:save-closure cindex) ; 2
     ;; 3
-    (let ((env (cons (list var :local eindex) env)))
-      (compile-form form env code))
-    ;; 4
-    (let ((g-to-fix (gen code 'go 0)))
-      (push (aref code g-to-fix) *fixups*)
-      (fixup code e-to-fix (next-ip code))
+    (let ((q-to-fix (gen code 'quote 0)))
+      (push (aref code q-to-fix) *fixups*)
+      (gen code 'set ip-index)
+      (gen code 'scheme-vm:save-frame frame-index)
+      (let ((env (cons (list var :local eindex) env)))
+        (compile-form form env code)) ; 4
       ;; 5
-      (gen code 'scheme-vm:load-closure cindex)
-      (fixup code g-to-fix (next-ip code)))))
+      (gen code 'scheme-vm:restore-link ip-index)
+      (gen code 'scheme-vm:load-frame frame-index)
+      (gen code 'return)
+      ;; 6
+      (let ((n (next-ip code)))
+        (fixup code e-to-fix n)
+        (fixup code q-to-fix n))
+      (gen code 'scheme-vm:load-closure cindex))))
 
 (defun gen-escape (escape value env code)
   ;; 1) Evaluate the escape and store it in the frame.

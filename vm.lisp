@@ -154,14 +154,6 @@
              ((set)
               (destructuring-bind (i) data
                 (setf (frame-value frame i) accum)))
-             ((getf) ; get frame
-              (destructuring-bind (framei datai) data
-                (let ((f (frame-value frame framei)))
-                  (setf accum (frame-value f datai)))))
-             ((setf) ; set frame
-              (destructuring-bind (framei datai) data
-                (let ((f (frame-value frame framei)))
-                  (setf (frame-value f datai) accum))))
              ;; closures: a pair of an IP and a vector
              ((closure-alloc)
               (destructuring-bind (function-start size) data

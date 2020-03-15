@@ -87,12 +87,13 @@
 
 (defpackage #:scheme
   (:use #:cl)
-  (:shadow #:eval #:continue)
+  (:shadow #:eval #:continue #:compile)
   (:export #:eval)
   (:export #:let/ec #:escape)
   (:export #:let/dc #:extend)
   (:export #:backtrace)
-  (:export #:base-env))
+  (:export #:base-env)
+  (:export #:compile))
 
 (in-package #:scheme)
 

@@ -75,6 +75,9 @@
                                  (values new-code
                                          (append boring all-fixups)))))))))
 
+(defun compile (params body)
+  (values (compile-function-and params body nil)))
+
 (defun gen-arg-parse (params code)
   (etypecase params
     (null nil) ; todo: check arg count

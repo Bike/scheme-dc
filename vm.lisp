@@ -2,7 +2,7 @@
   (:use #:cl)
   (:export #:interpret)
   (:export #:*trace* #:display-code)
-  (:export #:igo #:set-link #:save-link #:restore-link
+  (:export #:igo #:set-link #:save-link #:load-link
            #:closure-alloc #:closure-ip #:closure-vec
            #:closure-get #:closure-set
            #:save-closure #:load-closure #:rotatef-closure
@@ -11,26 +11,6 @@
            #:save-frame #:load-frame))
 
 (in-package #:scheme-vm)
-
-(defclass frame ()
-  ((%next :initarg :next :accessor next :type (or frame null))))
-
-(defclass variable-frame (frame)
-  ((%vals :initarg :vals :reader vals :type simple-vector)))
-
-(defun make-variable-frame (nvals next)
-  (check-type nvals (integer 0))
-  (check-type next (or frame null))
-  (make-instance 'variable-frame
-    :vals (make-array nvals) :next next))
-
-(defun copy-variable-frame (frame)
-  (make-instance 'variable-frame :vals (copy-seq (vals frame)) :next nil))
-
-(defun frame-value (frame i)
-  (svref (vals frame) i))
-(defun (setf frame-value) (value frame i)
-  (setf (svref (vals frame) i) value))
 
 (defclass closure ()
   ((%ip :initarg :ip :reader closure-ip)
@@ -61,23 +41,6 @@
   (make-instance 'continuation :ip ip :shallow shallow :deep deep
                  :rframei rframei :ripi ripi))
 
-(defun copy-slice (shallow deep)
-  (assert (typep shallow 'variable-frame))
-  (assert (typep deep 'variable-frame))
-  (when (eq shallow deep)
-    (let ((copy (copy-variable-frame shallow)))
-      (return-from copy-slice (values copy copy))))
-  (loop with shallow-copy = (copy-variable-frame shallow)
-        with frame = (next shallow) with prev = shallow-copy
-        if (eq frame deep)
-          do (return (values shallow-copy prev))
-        when (null frame)
-          do (error "Cannot copy slice from exited escape")
-        do (let ((new (copy-variable-frame frame)))
-             (psetf frame (next frame)
-                    (next prev) new
-                    prev new))))
-
 (defvar *trace* nil)
 
 (defun nice-instruction-print (ip opcode args)
@@ -88,147 +51,158 @@
         for i from 0
         do (nice-instruction-print i opcode args)))
 
-(defun interpret (code &optional arg)
-  (declare (optimize debug))
-  (loop with frame = nil ; holds frame
-        with accum = arg ; general purpose + argument
-        with link = nil ; holds return address upon entry
-        with closure = nil ; holds closure vector
+(defun interpret (code &key arg (stack (make-array 200)))
+  (loop with sp = 0 ; stack pointer
+        with accum = arg ; general purpose, argument, return value
+        with link = nil ; return address in a call
+        with closure = nil ; closure vector
         for ip = 0 then (1+ ip)
         for (opcode . data) = (svref code ip)
         when *trace*
           do (nice-instruction-print ip opcode data)
-        do (ecase opcode
-             ((quote)
-              (destructuring-bind (object) data
-                (setf accum object)))
-             ((go)
-              (destructuring-bind (new-ip) data
-                (setf ip (1- new-ip))))
-             ((igo)
-              (destructuring-bind (i) data
-                (setf ip (1- (frame-value frame i)))))
-             ((return)
-              (destructuring-bind () data
-                (if (null link)
-                    (return accum)
-                    (setf ip (1- link)))))
-             ((funcall)
-              (destructuring-bind (function &rest constants) data
-                (setf accum (apply function accum constants))))
-             ((set-link)
-              (destructuring-bind (link-ip) data
-                (setf link link-ip)))
-             ((save-link)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) link)))
-             ((restore-link)
-              (destructuring-bind (i) data
-                (setf link (frame-value frame i))))
-             ;; for argument parsing
-             ((car)
-              (unless (consp accum) (error "Bad CAR"))
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) (car accum))))
-             ((cdr)
-              (unless (consp accum) (error "Bad CDR"))
-              (destructuring-bind () data
-                (setf accum (cdr accum))))
-             ;; and for calls...
-             ((cons)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i)
-                      (cons accum (frame-value frame i)))))
-             ;; ok normal stuff again
-             ((push)
-              (destructuring-bind (nvals) data
-                (setf frame (make-variable-frame nvals frame))))
-             ((pop)
-              (destructuring-bind () data
-                (if (null frame)
-                    (error "No frame to pop")
-                    (setf frame (next frame)))))
-             ((get)
-              (destructuring-bind (i) data
-                (setf accum (frame-value frame i))))
-             ((set)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) accum)))
-             ;; closures: a pair of an IP and a vector
-             ((closure-alloc)
-              (destructuring-bind (function-start size) data
-                (setf accum (closure function-start size))))
-             ((closure-ip)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) (closure-ip accum))))
-             ((closure-vec)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) (closure-vector accum))))
-             ((closure-get)
-              (destructuring-bind (vector-index) data
-                (setf accum (svref closure vector-index))))
-             ((closure-set)
-              (destructuring-bind (cindex vector-index) data
-                (let* ((closure (frame-value frame cindex))
-                       (vector (closure-vector closure)))
-                  (setf (svref vector vector-index) accum))))
-             ((save-closure)
-              (destructuring-bind (cindex) data
-                (setf (frame-value frame cindex) closure)))
-             ((load-closure)
-              (destructuring-bind (cindex) data
-                (setf closure (frame-value frame cindex))))
-             ((rotatef-closure)
-              (destructuring-bind (i) data
-                (rotatef closure (frame-value frame i))))
-             ;; escapes: a pair of an IP and a frame
-             ;; NOTE/TODO?: With flow analysis, the IP can often
-             ;; sometimes be known statically, but we don't
-             ;; optimize this.
-             ((alloc-escape)
-              (destructuring-bind (next-ip ripi rframei) data
-                (setf accum (make-escape next-ip frame ripi rframei))))
-             ((escape-frame)
-              (destructuring-bind (i) data
-                (setf frame (escape-frame (frame-value frame i)))))
-             ((escape-ip)
-              (destructuring-bind (i) data
-                (setf link (escape-ip (frame-value frame i)))))
-             ;; delimited continuations: An IP and a list of frames.
-             ;; NOTE that in the more realistic case, these instructions
-             ;; would be functions in the runtime probably.
-             ((slice-continuation)
-              ;; read an escape from accum.
-              ;; make a slice with the given IP and all frames up to escape.
-              ;; since at the moment frames contain their next link,
-              ;; we only need to actually store the most recent and least
-              ;; recent frames (and doing the latter is an optimization)
-              (destructuring-bind (next-ip) data
-                (multiple-value-bind (shallow deep)
-                    (copy-slice frame (escape-frame accum))
-                  (setf accum (continuation next-ip shallow deep
-                                            (ripi accum)
-                                            (rframei accum))))))
-             ((extend)
-              ;; Throw a ton more frames on the stack.
-              (destructuring-bind (next-ip i) data
-                (let* ((continuation (frame-value frame i))
-                       (dest-ip (continuation-ip continuation))
-                       (dest-shallow (continuation-shallow continuation))
-                       (dest-deep (continuation-deep continuation))
-                       (ripi (ripi continuation))
-                       (rframei (rframei continuation)))
-                  ;; Fix up the end frame so it returns to here.
-                  (setf (frame-value dest-deep ripi) next-ip
-                        (frame-value dest-deep rframei) frame
-                        frame dest-shallow
-                        ip (1- dest-ip)))))
-             ;; we use these for let/dc but in a real impl
-             ;; they'd be used in the implementations of
-             ;; escape and extend and stuff.
-             ((save-frame)
-              (destructuring-bind (i) data
-                (setf (frame-value frame i) frame)))
-             ((load-frame)
-              (destructuring-bind (i) data
-                (setf frame (frame-value frame i)))))))
+        do (flet ((fv (i) ; frame value
+                    (svref stack (- sp i)))
+                  ((setf fv) (v i)
+                    (setf (svref stack (- sp i)) v)))
+             (declare (inline fv (setf fv)))
+             (ecase opcode
+               ;; registers and the stack
+               ((get) ; %accum = (%sp,-$i)
+                (destructuring-bind (i) data
+                  (setf accum (fv i))))
+               ((set) ; (%sp,-$i) = %accum
+                (destructuring-bind (i) data
+                  (setf (fv i) accum)))
+               ((load-closure) ; closure = (%sp,-$cindex)
+                (destructuring-bind (cindex) data
+                  (setf closure (fv cindex))))
+               ((save-closure) ; (%sp,-$cindex) = closure
+                (destructuring-bind (cindex) data
+                  (setf (fv cindex) closure)))
+               ((rotatef-closure) ; swap em (this is me being lazy)
+                (destructuring-bind (cindex) data
+                  (rotatef closure (fv cindex))))
+               ((save-link) ; (%sp,-$i) = %link
+                (destructuring-bind (i) data
+                  (setf (fv i) link)))
+               ((load-link) ; %link = (%sp,-$i)
+                (destructuring-bind (i) data
+                  (setf link (fv i))))
+               ((save-frame) ; (%sp,-$i) = %sp
+                (destructuring-bind (i) data
+                  (setf (fv i) sp)))
+               ((load-frame) ; %sp = (%sp,-$i)
+                (destructuring-bind (i) data
+                  (setf sp (fv i))))
+               ((push) ; %sp = %sp + $nvals; (%sp) = %sp - nvals
+                ;; i.e., increments the stack pointer
+                ;; and puts the old stack pointer at ($sp)
+                (destructuring-bind (nvals) data
+                  (let ((prev sp))
+                    (incf sp nvals)
+                    (setf (fv 0) prev))))
+               ((pop); %sp = (%sp)
+                (destructuring-bind () data
+                  (setf sp (fv 0))))
+               ;; control flow (messing with ip)
+               ;; These subtract one because the loop adds one.
+               ;; We could store the IP pre subtracted, but then
+               ;; it's more confusing to read.
+               ((go) ; %ip = $i
+                (destructuring-bind (new-ip) data
+                  (setf ip (1- new-ip))))
+               ((igo); %ip = (%sp,-$i) "indirect go"
+                (destructuring-bind (i) data
+                  (setf ip (1- (fv i)))))
+               ((return) ; %ip = %link, or terminate program
+                (destructuring-bind () data
+                  (if (null link)
+                      (return accum)
+                      (setf ip (1- link)))))
+               ((set-link) ; %link = $i FIXME: remove this, use quote load-link
+                (destructuring-bind (link-ip) data
+                  (setf link link-ip)))
+               ;; lists - mostly for argument production and parsing
+               ((car) ; (%sp,-$i) = car[%accum]
+                (unless (consp accum) (error "Bad CAR"))
+                (destructuring-bind (i) data
+                  (setf (fv i) (car accum))))
+               ((cdr) ; %accum = cdr[%accum]
+                (unless (consp accum) (error "Bad CDR"))
+                (destructuring-bind () data
+                  (setf accum (cdr accum))))
+               ((cons) ; (%sp,-$i) = cons[%accum, (%sp,-$i)]
+                (destructuring-bind (i) data
+                  (setf (fv i)
+                        (cons accum (fv i)))))
+               ;; closures: a pair of an IP and a vector
+               ((closure-alloc) ; %accum = closure_alloc[$ip, $size]
+                (destructuring-bind (function-start size) data
+                  (setf accum (closure function-start size))))
+               ((closure-ip) ; (%sp,-$i) = closure_ip[%accum]
+                (destructuring-bind (i) data
+                  (setf (fv i) (closure-ip accum))))
+               ((closure-vec) ; (%sp,-$i) = closure_vector[%accum]
+                (destructuring-bind (i) data
+                  (setf (fv i) (closure-vector accum))))
+               ((closure-get) ; %accum = svref[%closure, $vector_index]
+                (destructuring-bind (vector-index) data
+                  (setf accum (svref closure vector-index))))
+               ((closure-set)
+                ;; svref[closure_vector(%sp,-$i), $vector_index] = %accum
+                (destructuring-bind (cindex vector-index) data
+                  (let* ((closure (fv cindex))
+                         (vector (closure-vector closure)))
+                    (setf (svref vector vector-index) accum))))
+               ;; escapes: a pair of an IP and a frame, plus continuation info
+               ;; NOTE/TODO?: With flow analysis, we could cut out various
+               ;; parts: the frame if it's in the same function, the IP if
+               ;; the flow is tracked, and the ripi and rframei if we know
+               ;; it's not the basis for a let/dc.
+               ((alloc-escape)
+                (destructuring-bind (next-ip ripi rframei) data
+                  (setf accum (make-escape next-ip sp ripi rframei))))
+               ((escape-frame)
+                (destructuring-bind (i) data
+                  (setf sp (escape-frame (fv i)))))
+               ((escape-ip)
+                (destructuring-bind (i) data
+                  (setf link (escape-ip (fv i)))))
+               ;; delimited continuations: An IP and a list of frames.
+               ;; NOTE that in the more realistic case, these instructions
+               ;; would be functions in the runtime probably.
+               #+(or)
+               ((slice-continuation)
+                ;; read an escape from accum.
+                ;; make a slice with the given IP and all frames up to escape.
+                ;; since at the moment frames contain their next link,
+                ;; we only need to actually store the most recent and least
+                ;; recent frames (and doing the latter is an optimization)
+                (destructuring-bind (next-ip) data
+                  (multiple-value-bind (shallow deep)
+                      (copy-slice frame (escape-frame accum))
+                    (setf accum (continuation next-ip shallow deep
+                                              (ripi accum)
+                                              (rframei accum))))))
+               #+(or)
+               ((extend)
+                ;; Throw a ton more frames on the stack.
+                (destructuring-bind (next-ip i) data
+                  (let* ((continuation (frame-value frame i))
+                         (dest-ip (continuation-ip continuation))
+                         (dest-shallow (continuation-shallow continuation))
+                         (dest-deep (continuation-deep continuation))
+                         (ripi (ripi continuation))
+                         (rframei (rframei continuation)))
+                    ;; Fix up the end frame so it returns to here.
+                    (setf (frame-value dest-deep ripi) next-ip
+                          (frame-value dest-deep rframei) frame
+                          frame dest-shallow
+                          ip (1- dest-ip)))))
+               ;; misc
+               ((quote) ; %accum = $object
+                (destructuring-bind (object) data
+                  (setf accum object)))
+               ((funcall) ; %accum = cl_apply[$function, %accum, $...]
+                (destructuring-bind (function &rest constants) data
+                  (setf accum (apply function accum constants))))))))

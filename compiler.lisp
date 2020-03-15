@@ -17,14 +17,14 @@
 (defun compile-function (params body env)
   (let* ((code (make-array 0 :fill-pointer 0 :adjustable t))
          (*fixups* nil)
-         (*nvals* 1) ; unconditionally store link register
+         (*nvals* 2) ; unconditionally store link register and previous sp
          (to-fix (gen code 'push 0))
          (env (append (gen-arg-parse params code) env)))
-    (gen code 'scheme-vm:save-link 0)
+    (gen code 'scheme-vm:save-link 1)
     ;; Get goin
     (compile-form body env code)
     ;; aaaaand return.
-    (gen code 'scheme-vm:restore-link 0)
+    (gen code 'scheme-vm:load-link 1)
     (gen code 'pop)
     (gen code 'return)
     (fixup code to-fix *nvals*) ; frame size now known
@@ -265,7 +265,7 @@
       (let ((env (cons (list var :local eindex) env)))
         (compile-form form env code)) ; 4
       ;; 5
-      (gen code 'scheme-vm:restore-link ip-index)
+      (gen code 'scheme-vm:load-link ip-index)
       (gen code 'scheme-vm:load-frame frame-index)
       (gen code 'return)
       ;; 6

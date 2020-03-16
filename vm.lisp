@@ -32,14 +32,50 @@
 
 (defclass continuation ()
   ((%ip :initarg :ip :reader continuation-ip)
-   (%shallow :initarg :shallow :reader continuation-shallow)
+   (%stack :initarg :stack :reader continuation-stack)
+   ;; address, within stack, of the deepest frame.
+   ;; could be obtained by iteration but that's boring.
    (%deep :initarg :deep :reader continuation-deep)
+   ;; frame-relative index of spot containing IP let/ec will jump to.
    (%ripi :initarg :ripi :reader ripi)
+   ;; frame-relative index of spot containing SP let/ec will restore.
    (%rframei :initarg :rframei :reader rframei)))
 
-(defun continuation (ip shallow deep ripi rframei)
-  (make-instance 'continuation :ip ip :shallow shallow :deep deep
+(defun continuation (ip stack deep ripi rframei)
+  (make-instance 'continuation :ip ip :stack stack :deep deep
                  :rframei rframei :ripi ripi))
+
+;; For debug: split up the frames
+(defun display-stack (stack top)
+  (loop for prev-sp = top then sp
+        for sp = (aref stack prev-sp)
+        until (zerop prev-sp)
+        do (format t "~&~d: ~a~%"
+                   sp (subseq stack (1+ sp) (1+ prev-sp)))))
+
+;;; Edit all the saved stack pointers to point to
+;;; the correct places by incrementing them by the offset.
+(defun recontextualize-stack (cstack offset limit)
+  (loop with addr-of-sp = (1- (length cstack))
+        until (= limit addr-of-sp)
+        do (setf addr-of-sp
+                 (incf (aref cstack addr-of-sp) offset)))
+  cstack)
+
+(defun copy-slice (stack shallow deep)
+  ;; (display-stack stack shallow)
+  ;; Remember the stack frame layout:
+  ;; The previous SP is stored at SP. So we get deep's previous SP.
+  (let* ((prev-sp (aref stack deep))
+         (start (1+ prev-sp))
+         (end (1+ shallow)))
+    (values
+     (recontextualize-stack (subseq stack start end)
+                            ;; limit is -1 because it's before the
+                            ;; beginning of the stack slice.
+                            ;; this value will be altered, anyway.
+                            (- start) -1)
+     (- deep start))))
 
 (defvar *trace* nil)
 
@@ -171,7 +207,6 @@
                ;; delimited continuations: An IP and a list of frames.
                ;; NOTE that in the more realistic case, these instructions
                ;; would be functions in the runtime probably.
-               #+(or)
                ((slice-continuation)
                 ;; read an escape from accum.
                 ;; make a slice with the given IP and all frames up to escape.
@@ -179,26 +214,33 @@
                 ;; we only need to actually store the most recent and least
                 ;; recent frames (and doing the latter is an optimization)
                 (destructuring-bind (next-ip) data
-                  (multiple-value-bind (shallow deep)
-                      (copy-slice frame (escape-frame accum))
-                    (setf accum (continuation next-ip shallow deep
+                  (multiple-value-bind (slice deep)
+                      (copy-slice stack sp (escape-frame accum))
+                    (setf accum (continuation next-ip slice deep
                                               (ripi accum)
                                               (rframei accum))))))
-               #+(or)
                ((extend)
                 ;; Throw a ton more frames on the stack.
                 (destructuring-bind (next-ip i) data
-                  (let* ((continuation (frame-value frame i))
-                         (dest-ip (continuation-ip continuation))
-                         (dest-shallow (continuation-shallow continuation))
-                         (dest-deep (continuation-deep continuation))
+                  (let* ((continuation (fv i))
+                         (cstack (continuation-stack continuation))
+                         (deep (continuation-deep continuation))
                          (ripi (ripi continuation))
                          (rframei (rframei continuation)))
-                    ;; Fix up the end frame so it returns to here.
-                    (setf (frame-value dest-deep ripi) next-ip
-                          (frame-value dest-deep rframei) frame
-                          frame dest-shallow
-                          ip (1- dest-ip)))))
+                    ;; Append the saved slice onto the stack.
+                    (replace stack cstack :start1 sp)
+                    ;; Fix the let/ec next-sp and next-ip.
+                    ;; NOTE that we do this AFTER copying the thing,
+                    ;; in case multiple threads could use the same
+                    ;; delimited continuation. (Not that this system
+                    ;; actually has threads, but I might as well do
+                    ;; this right.)
+                    (setf (svref stack (+ sp deep (- ripi))) next-ip
+                          (svref stack (+ sp deep (- rframei))) sp)
+                    ;; Fix up.
+                    (recontextualize-stack stack sp (1- sp))
+                    ;; Set SP
+                    (setf sp (+ sp (length cstack) -1)))))
                ;; misc
                ((quote) ; %accum = $object
                 (destructuring-bind (object) data

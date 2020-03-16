@@ -1,0 +1,42 @@
+Continuations have been mysterious to me basically forever so I thought I should get around to implementing them. Best way to understand computer anything.
+
+Now it's pretty fuckin easy on a basic level: You write the usual (defun eval (form env) ...) except you add an additional argument for the continuation, and write in continuation-passing style. But this isn't how an actual compiled implementation works. You need a control stack.
+
+It's like midnight so I can't give a cogent explanation right now but here's the basic thing to remember: The call stack is a data structure. It is maintained by software. Continuations just mean doing things with it more complicated than calls.
+
+As for the software. scheme-dc2.lisp is an interpreter. It works somewhat more realistically than the CPS case above, in that the continuation is a stack of frames, but the frames arne't like those you'd get in compiled code. Still, it was informative.
+
+vm.lisp and compiler.lisp are a separate (except for the package definition) system that compiles the same language to a bespoke VM that's intended to be realistic enough. Specifically, there's a stack stored on a simple-vector that represents memory. You keep indices and yada yada it's fine. A few commits ago I had let/dc actually working here with a less realistic VM but then I broke it.
+
+The language is as follows:
+
+(let/ec e ...) and (escape e ...) work like escape continuations in pick a language. One shot, dynamic extent.
+
+(let/dc (d ...) ...) and (extend d ...) are the more interesting operators. let/dc saves a continuation delimitd by an outer let/ec escape continuation up to the current continuation, and binds it to d. extend takes that continuation and appends it to the current one.
+
+Long story short the usual reset/shift pair can be done with reset = let/ec e, shift = (let/dc (d e) (escape e ...)), and applying the continuation as (extend d ...). I think my formalization here is a bit clearer about the implementation details (specifically: escape cuts back the current continuation. extend adds to it. shift does both), which is of course what I want, but in actual code I can't think of a reason to not pair let/dc and escape like shift does.
+
+Some random things I've learned writing this that I should mark down before I fall asleep: I understand Clinger's "Implementation Strategies for First-Class Continuations" a lot better now. My basic one here is the one where you use the control stack normally, then copy it (or in my case, some of it, since continuations are delimited) out onto the heap. Let's examine some deets.
+
+We can imagine various degrees of generality here.
+
+First off, we can have a let/ec where everywhere the e goes is known, and it only goes to calls to escape in the same frame. Then let/ec is a no-op and escape is a jump. This corresponds to local BLOCK/RETURN-FROM in common lisp, or rather is exactly that.
+
+Secondly we have the case where everywhere it goes is known and it goes to calls to escape, but possibly in different frames (e.g. in different function bodies). Then we need an actual escape object to store a reference to the frame; however the destination IP for any escape is known at compile time. The escape object can just be a stack frame pointer of some kind. This corresponds to nonlocal BLOCK/RETURN-FROM in CL and I imagine it's the common strategy, excepting unwind-protect which hoo boy that's a whole other can of fucking worms I'll get to later.
+
+Now for delimited continuations. First off, although I didn't realize this at first, the deeper limit of a delimited continuation needs special processing. E.g. consider the basic example
+
+(+ 1 (reset (* 2 (shift k (k (k 4)))))) =
+(+ 1 (let/ec e (* 2 (let/dc (d e) (escape e (extend d (extend d 4)))))))
+
+When this is compiled it's probably all in one function frame, so what this is at the machine code level is actually a loop. When let/ec returns "normally" from the extended continuation, the first time, it needs to return to the second call to extend - but if you naively compile let/ec to not do anything special on normal return it doesn't do any kind of indirect jump. Similar considerations apply to the frame. So, if a delimited continuation is involved, let/ec's normal return has to do an indirected jump and stack frame alteration, which for the non-delimited-continuation case just restore the values to what they already are. What a pain.
+
+So the first available optimization is that if a let/ec is known to not delimit a let/dc, none of that shit needs to be bothered with. But then in an actual language let/ec and delimit/dc might be distinct operators anyway.
+
+Let me explain how let/dc and extend are implemented a bit more. In this implementation, when you hit a let/dc, the portion of the control stack between let/ec and let/dc is copied into newly allocated heap space. Furthermore, all the stack frames in it are edited so that they point to the correct heap space frame. Essentially this slice looks like what the control stack would look like if the program had started with the let/ec.
+
+When you extend, this heap slice is copied onto the control stack. The stack frames in it are edited again to point correctly. The final (deepest) frame of the slice part of the control stack is also edited to set up the let/ec special processing described above. Then the stack frame register is pointed to the new top and a jump is done.
+
+This double editing is obviously stupid, and could probably be avoided if I thought harder. The double copy probably can't be avoided, though. Since the final frame has to be edited to return to the right place, the let/dc copy can't be shared by multiple threads of execution. (If the system is known to be single threaded, it might be okay?)
+
+call/cc is of course a special case of delimited continuations where the upper limit is just the end of the stack. This means that (a) the above processing considerations don't apply, and (b) the stack can be replaced wholesale. So only one copy is necessary: let/cc copies the whole stack out to the heap, and invoking the continuation replaces the control stack with that heap - or just uses that heap as the new control stack. Having mutable variables in the stack screws with this though.

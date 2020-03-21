@@ -40,3 +40,9 @@ When you extend, this heap slice is copied onto the control stack. The stack fra
 This double editing is obviously stupid, and could probably be avoided if I thought harder. The double copy probably can't be avoided, though. Since the final frame has to be edited to return to the right place, the let/dc copy can't be shared by multiple threads of execution. (If the system is known to be single threaded, it might be okay?)
 
 call/cc is of course a special case of delimited continuations where the upper limit is just the end of the stack. This means that (a) the above processing considerations don't apply, and (b) the stack can be replaced wholesale. So only one copy is necessary: let/cc copies the whole stack out to the heap, and invoking the continuation replaces the control stack with that heap - or just uses that heap as the new control stack. Having mutable variables in the stack screws with this though.
+
+EDIT 21-03-2020: Actually the let/ec processing is bad. Consider having a let/dc which copies a part of the stack containing a let/ec in it - i.e. you have let/ec, let/ec, let/dc, and the let/dc connects to the first let/ec. Then because of the special processing you have a frame pointer from the second let/ec in the stack somewhere. The let/dc copier doesn't know about it so it can't be adjusted so Whoops.
+
+This applies more generally for pretty much any pointer into the stack I think. I mentioned mutable variables before and this is basically it.
+
+The only way out of this I can see is making all references into the stack relative, but that might be... involved. It does have the advantage that the fix-up-the-stack-for-extend part is constant time rather than linear in the length of the slice, though.
